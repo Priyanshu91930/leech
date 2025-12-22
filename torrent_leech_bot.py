@@ -660,21 +660,37 @@ async def leech_command(client: Client, message: Message):
         if download.gid in active_downloads:
             del active_downloads[download.gid]
         
-        # Download complete
-        download_path = download.files[0].path if download.files else os.path.join(DOWNLOAD_DIR, download.name)
+        # Download complete - find the actual downloaded files
+        actual_path = None
         
-        # Get actual path (folder or file)
-        if os.path.isdir(download_path):
-            actual_path = download_path
-        else:
-            # For single file downloads
-            actual_path = download_path
-            if not os.path.exists(actual_path):
-                # Try to find the downloaded file
-                for file in download.files:
-                    if os.path.exists(file.path):
-                        actual_path = file.path
-                        break
+        # Method 1: Check aria2's reported file paths
+        if download.files:
+            for file in download.files:
+                if file.path and os.path.exists(file.path):
+                    actual_path = file.path
+                    break
+        
+        # Method 2: Check for folder with torrent name in DOWNLOAD_DIR
+        if not actual_path or not os.path.exists(actual_path):
+            torrent_folder = os.path.join(DOWNLOAD_DIR, download.name)
+            if os.path.exists(torrent_folder):
+                actual_path = torrent_folder
+        
+        # Method 3: Scan DOWNLOAD_DIR for any new files/folders
+        if not actual_path or not os.path.exists(actual_path):
+            for item in os.listdir(DOWNLOAD_DIR):
+                item_path = os.path.join(DOWNLOAD_DIR, item)
+                # Skip aria2 control files
+                if not item.endswith('.aria2'):
+                    actual_path = item_path
+                    break
+        
+        # If still not found, report error
+        if not actual_path or not os.path.exists(actual_path):
+            await safe_edit_text(status_msg, f"❌ Error: Downloaded files not found in {DOWNLOAD_DIR}")
+            if download.gid in active_downloads:
+                del active_downloads[download.gid]
+            return
         
         await safe_edit_text(
             status_msg,
