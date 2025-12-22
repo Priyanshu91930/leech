@@ -16,7 +16,13 @@ import platform
 # Try to use uvloop on Linux for better performance
 try:
     import uvloop
+    import asyncio
     uvloop.install()
+    # Create event loop for Python 3.11+ compatibility
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
     print("✅ Using uvloop for better performance")
 except ImportError:
     pass
