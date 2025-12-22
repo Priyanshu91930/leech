@@ -94,6 +94,9 @@ TRACKERS_STRING = ",".join(TRACKERS)
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 BOT_START_TIME = time.time()
 
+# Current upload channel (can be changed with /channel command)
+current_channel = CHANNEL_ID
+
 # Track active downloads: {gid: {"message": Message, "start_time": time, "cancelled": bool}}
 active_downloads = {}
 
@@ -442,9 +445,75 @@ async def start_command(client: Client, message: Message):
         "• `/stats` - System statistics\n"
         "• `/speedtest` - Server speed test\n\n"
         "**🛠️ Control:**\n"
-        "• `/cancel` - Cancel all downloads\n\n"
+        "• `/cancel` - Cancel all downloads\n"
+        "• `/channel` - View/change upload channel\n\n"
         f"⏱️ **Uptime:** {uptime}"
     )
+
+
+@app.on_message(filters.command("channel"))
+async def channel_command(client: Client, message: Message):
+    """View or change the upload channel"""
+    global current_channel
+    
+    if not is_authorized(message.from_user.id):
+        await message.reply_text("❌ You are not authorized to use this bot.")
+        return
+    
+    # If no argument provided, show current channel
+    if len(message.command) < 2:
+        try:
+            chat = await client.get_chat(current_channel)
+            channel_name = chat.title or "Unknown"
+            await message.reply_text(
+                f"📺 **Current Upload Channel**\n\n"
+                f"**Name:** {channel_name}\n"
+                f"**ID:** `{current_channel}`\n\n"
+                f"To change: `/channel <channel_id>`\n"
+                f"Example: `/channel -1001234567890`"
+            )
+        except Exception as e:
+            await message.reply_text(
+                f"📺 **Current Upload Channel**\n\n"
+                f"**ID:** `{current_channel}`\n\n"
+                f"⚠️ Could not fetch channel info: {str(e)[:50]}\n\n"
+                f"To change: `/channel <channel_id>`"
+            )
+        return
+    
+    # Try to set new channel
+    try:
+        new_channel = int(message.command[1])
+        
+        # Verify the bot has access to the channel
+        try:
+            chat = await client.get_chat(new_channel)
+            channel_name = chat.title or "Unknown"
+            
+            # Test if we can send messages
+            old_channel = current_channel
+            current_channel = new_channel
+            
+            await message.reply_text(
+                f"✅ **Channel Updated!**\n\n"
+                f"**New Channel:** {channel_name}\n"
+                f"**ID:** `{new_channel}`\n\n"
+                f"All uploads will now go to this channel."
+            )
+        except Exception as e:
+            await message.reply_text(
+                f"❌ **Failed to switch channel**\n\n"
+                f"Error: {str(e)[:100]}\n\n"
+                f"Make sure:\n"
+                f"• The channel ID is correct\n"
+                f"• The bot is added to the channel\n"
+                f"• The bot has permission to post"
+            )
+    except ValueError:
+        await message.reply_text(
+            f"❌ Invalid channel ID. Must be a number.\n\n"
+            f"Example: `/channel -1001234567890`"
+        )
 
 
 @app.on_message(filters.command("status"))
@@ -663,7 +732,7 @@ async def ytdl_command(client: Client, message: Message):
                     await safe_edit_text(status_msg, f"✅ Downloaded: `{f}`\n📤 Uploading to Telegram...")
                     
                     # Upload to channel
-                    success, error = await upload_file(client, file_path, CHANNEL_ID, status_msg)
+                    success, error = await upload_file(client, file_path, current_channel, status_msg)
                     if success:
                         delete_path(file_path)
                         await safe_edit_text(status_msg, f"✅ **Done!**\n📁 `{f}`")
@@ -857,7 +926,7 @@ async def leech_command(client: Client, message: Message):
         
         # Upload to Telegram
         if os.path.isdir(actual_path):
-            uploaded, failed = await upload_directory(client, actual_path, CHANNEL_ID, status_msg)
+            uploaded, failed = await upload_directory(client, actual_path, current_channel, status_msg)
             
             await safe_edit_text(
                 status_msg,
@@ -868,7 +937,7 @@ async def leech_command(client: Client, message: Message):
                 f"🗑️ Cleaning up..."
             )
         else:
-            success, error = await upload_file(client, actual_path, CHANNEL_ID, status_msg)
+            success, error = await upload_file(client, actual_path, current_channel, status_msg)
             if success:
                 await safe_edit_text(
                     status_msg,
