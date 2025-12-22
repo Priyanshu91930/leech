@@ -206,14 +206,108 @@ async def progress_callback(current: int, total: int, message: Message, start_te
     await safe_edit_text(message, text)
 
 
+def split_file(file_path: str, split_size: int = MAX_SPLIT_SIZE) -> list:
+    """
+    Split a large file into smaller parts.
+    Returns a list of paths to the split files.
+    """
+    file_name = os.path.basename(file_path)
+    file_size = os.path.getsize(file_path)
+    split_dir = os.path.dirname(file_path)
+    
+    parts = []
+    part_num = 1
+    
+    with open(file_path, 'rb') as f:
+        while True:
+            chunk = f.read(split_size)
+            if not chunk:
+                break
+            
+            # Create part filename with padding (part01, part02, etc.) at the beginning
+            part_name = f"part{part_num:02d}_{file_name}"
+            part_path = os.path.join(split_dir, part_name)
+            
+            with open(part_path, 'wb') as part_file:
+                part_file.write(chunk)
+            
+            parts.append(part_path)
+            part_num += 1
+    
+    return parts
+
+
 async def upload_file(client: Client, file_path: str, channel_id: int, status_message: Message):
     """Upload a single file to Telegram channel"""
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
     
+    # If file is larger than 2GB, split it into parts
     if file_size > MAX_SPLIT_SIZE:
-        await safe_edit_text(status_message, f"⚠️ File `{file_name}` is larger than 2GB. Skipping...")
-        return False, "File too large"
+        await safe_edit_text(status_message, f"📦 File `{file_name}` is larger than 2GB. Splitting into parts...")
+        
+        try:
+            # Split the file
+            parts = split_file(file_path)
+            total_parts = len(parts)
+            
+            await safe_edit_text(status_message, f"✅ Split into {total_parts} parts. Starting upload...")
+            
+            uploaded_parts = 0
+            failed_parts = 0
+            
+            for i, part_path in enumerate(parts, 1):
+                part_name = os.path.basename(part_path)
+                part_size = os.path.getsize(part_path)
+                
+                await safe_edit_text(
+                    status_message, 
+                    f"📤 Uploading part {i}/{total_parts}: `{part_name}`\n"
+                    f"📁 Size: {get_readable_size(part_size)}"
+                )
+                
+                # Upload part as document
+                max_retries = 3
+                success = False
+                for attempt in range(max_retries):
+                    try:
+                        await client.send_document(
+                            chat_id=channel_id,
+                            document=part_path,
+                            caption=f"📄 {part_name} (Part {i}/{total_parts})",
+                            progress=progress_callback,
+                            progress_args=(status_message, f"📤 Uploading: `{part_name}` (Part {i}/{total_parts})")
+                        )
+                        success = True
+                        uploaded_parts += 1
+                        break
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value)
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(3)
+                        else:
+                            print(f"Failed to upload part {part_name}: {e}")
+                            failed_parts += 1
+                
+                # Delete the part file after upload
+                try:
+                    os.remove(part_path)
+                except Exception:
+                    pass
+            
+            # Delete original file after all parts uploaded
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+            
+            if failed_parts > 0:
+                return False, f"Failed to upload {failed_parts} parts"
+            return True, None
+            
+        except Exception as e:
+            return False, f"Failed to split file: {str(e)}"
     
     max_retries = 3
     for attempt in range(max_retries):
