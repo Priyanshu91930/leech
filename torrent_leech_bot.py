@@ -189,28 +189,69 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
         pass
 
 
-# Track last progress update time
+# Track last progress update time and bytes for speed calculation
 _last_progress_update = {}
+_last_progress_bytes = {}
+_upload_start_time = {}
 
-async def progress_callback(current: int, total: int, message: Message, start_text: str):
-    """Update progress during upload with rate limiting"""
-    global _last_progress_update
+# Track active uploads for cancellation
+active_uploads = {}
+
+async def progress_callback(current: int, total: int, message: Message, start_text: str, upload_id: str = None):
+    """Update progress during upload with rate limiting, speed, and cancel button"""
+    global _last_progress_update, _last_progress_bytes, _upload_start_time
     
-    # Rate limit: only update every 5 seconds
     msg_id = message.id
     now = time.time()
-    if msg_id in _last_progress_update and now - _last_progress_update[msg_id] < 5:
+    
+    # Initialize tracking for new uploads
+    if msg_id not in _upload_start_time:
+        _upload_start_time[msg_id] = now
+        _last_progress_bytes[msg_id] = 0
+    
+    # Check if upload was cancelled
+    if upload_id and upload_id in active_uploads and active_uploads[upload_id].get("cancelled"):
+        raise Exception("Upload cancelled by user")
+    
+    # Rate limit: only update every 3 seconds
+    if msg_id in _last_progress_update and now - _last_progress_update[msg_id] < 3:
         return
+    
+    # Calculate speed
+    time_diff = now - _last_progress_update.get(msg_id, now - 1)
+    bytes_diff = current - _last_progress_bytes.get(msg_id, 0)
+    speed = bytes_diff / time_diff if time_diff > 0 else 0
+    
     _last_progress_update[msg_id] = now
+    _last_progress_bytes[msg_id] = current
     
     percent = (current / total) * 100
     progress_bar = "█" * int(percent // 5) + "░" * (20 - int(percent // 5))
+    
+    # Calculate ETA
+    if speed > 0:
+        remaining = total - current
+        eta_seconds = int(remaining / speed)
+        eta = get_readable_time(eta_seconds)
+    else:
+        eta = "-"
+    
     text = (
         f"{start_text}\n\n"
         f"📊 Progress: [{progress_bar}] {percent:.1f}%\n"
-        f"📁 Size: {get_readable_size(current)} / {get_readable_size(total)}"
+        f"📁 Size: {get_readable_size(current)} / {get_readable_size(total)}\n"
+        f"⚡ Speed: {get_readable_size(speed)}/s\n"
+        f"⏱️ ETA: {eta}"
     )
-    await safe_edit_text(message, text)
+    
+    # Add cancel button if upload_id is provided
+    reply_markup = None
+    if upload_id:
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel Upload", callback_data=f"cancelup_{upload_id}")]
+        ])
+    
+    await safe_edit_text(message, text, reply_markup=reply_markup)
 
 
 async def split_file(file_path: str, status_message: Message, split_size: int = MAX_SPLIT_SIZE) -> list:
@@ -349,9 +390,19 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
         except Exception as e:
             return False, f"Failed to split file: {str(e)}"
     
+    # Generate unique upload ID for cancellation
+    upload_id = f"up_{int(time.time())}_{os.path.basename(file_path)[:20]}"
+    active_uploads[upload_id] = {"cancelled": False, "file": file_name}
+    
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            # Check if cancelled before starting
+            if active_uploads.get(upload_id, {}).get("cancelled"):
+                if upload_id in active_uploads:
+                    del active_uploads[upload_id]
+                return False, "Upload cancelled"
+            
             await safe_edit_text(status_message, f"📤 Uploading: `{file_name}`\n📁 Size: {get_readable_size(file_size)}")
             
             # Determine file type and upload accordingly
@@ -362,7 +413,7 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                     thumb=custom_thumb if custom_thumb and os.path.exists(custom_thumb) else None,
                     caption=f"📹 {file_name}",
                     progress=progress_callback,
-                    progress_args=(status_message, f"📤 Uploading video: `{file_name}`")
+                    progress_args=(status_message, f"📤 Uploading video: `{file_name}`", upload_id)
                 )
             elif file_name.lower().endswith(('.mp3', '.flac', '.wav', '.aac', '.ogg')):
                 await client.send_audio(
@@ -370,7 +421,7 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                     audio=file_path,
                     caption=f"🎵 {file_name}",
                     progress=progress_callback,
-                    progress_args=(status_message, f"📤 Uploading audio: `{file_name}`")
+                    progress_args=(status_message, f"📤 Uploading audio: `{file_name}`", upload_id)
                 )
             elif file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
                 await client.send_photo(
@@ -384,8 +435,12 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                     document=file_path,
                     caption=f"📄 {file_name}",
                     progress=progress_callback,
-                    progress_args=(status_message, f"📤 Uploading file: `{file_name}`")
+                    progress_args=(status_message, f"📤 Uploading file: `{file_name}`", upload_id)
                 )
+            
+            # Clean up tracking
+            if upload_id in active_uploads:
+                del active_uploads[upload_id]
             
             return True, None
         except FloodWait as e:
@@ -653,6 +708,24 @@ async def delete_thumb_callback(client: Client, callback_query: CallbackQuery):
         )
     except Exception as e:
         await callback_query.answer(f"❌ Error: {str(e)[:50]}", show_alert=True)
+
+
+@app.on_callback_query(filters.regex(r"^cancelup_"))
+async def cancel_upload_callback(client: Client, callback_query: CallbackQuery):
+    """Handle cancel upload button click"""
+    if not is_authorized(callback_query.from_user.id):
+        await callback_query.answer("❌ You are not authorized!", show_alert=True)
+        return
+    
+    # Extract upload ID from callback data
+    upload_id = callback_query.data.replace("cancelup_", "")
+    
+    if upload_id in active_uploads:
+        active_uploads[upload_id]["cancelled"] = True
+        await callback_query.answer("⏹️ Cancelling upload...", show_alert=False)
+        await callback_query.message.edit_text("❌ **Upload Cancelled!**")
+    else:
+        await callback_query.answer("⚠️ Upload not found or already completed.", show_alert=True)
 
 
 @app.on_message(filters.command("status"))
