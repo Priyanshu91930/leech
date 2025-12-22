@@ -182,8 +182,20 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
         pass
 
 
+# Track last progress update time
+_last_progress_update = {}
+
 async def progress_callback(current: int, total: int, message: Message, start_text: str):
-    """Update progress during upload"""
+    """Update progress during upload with rate limiting"""
+    global _last_progress_update
+    
+    # Rate limit: only update every 5 seconds
+    msg_id = message.id
+    now = time.time()
+    if msg_id in _last_progress_update and now - _last_progress_update[msg_id] < 5:
+        return
+    _last_progress_update[msg_id] = now
+    
     percent = (current / total) * 100
     progress_bar = "█" * int(percent // 5) + "░" * (20 - int(percent // 5))
     text = (
