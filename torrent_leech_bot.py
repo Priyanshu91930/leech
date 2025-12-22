@@ -453,67 +453,127 @@ async def start_command(client: Client, message: Message):
 
 @app.on_message(filters.command("channel"))
 async def channel_command(client: Client, message: Message):
-    """View or change the upload channel"""
+    """View current channel and show instructions to change"""
     global current_channel
     
     if not is_authorized(message.from_user.id):
         await message.reply_text("❌ You are not authorized to use this bot.")
         return
     
-    # If no argument provided, show current channel
-    if len(message.command) < 2:
-        try:
-            chat = await client.get_chat(current_channel)
-            channel_name = chat.title or "Unknown"
-            await message.reply_text(
-                f"📺 **Current Upload Channel**\n\n"
-                f"**Name:** {channel_name}\n"
-                f"**ID:** `{current_channel}`\n\n"
-                f"To change: `/channel <channel_id>`\n"
-                f"Example: `/channel -1001234567890`"
-            )
-        except Exception as e:
-            await message.reply_text(
-                f"📺 **Current Upload Channel**\n\n"
-                f"**ID:** `{current_channel}`\n\n"
-                f"⚠️ Could not fetch channel info: {str(e)[:50]}\n\n"
-                f"To change: `/channel <channel_id>`"
-            )
+    # Show current channel and instructions
+    try:
+        chat = await client.get_chat(current_channel)
+        channel_name = chat.title or "Unknown"
+        channel_info = f"**Name:** {channel_name}\n**ID:** `{current_channel}`"
+    except Exception:
+        channel_info = f"**ID:** `{current_channel}`"
+    
+    await message.reply_text(
+        f"📺 **Current Upload Channel**\n\n"
+        f"{channel_info}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"**📝 To change the upload channel:**\n\n"
+        f"1️⃣ Add the bot as **Admin** to your channel\n"
+        f"2️⃣ Forward any message from that channel here\n"
+        f"3️⃣ Click the button to set it as upload channel"
+    )
+
+
+@app.on_message(filters.forwarded & filters.private)
+async def forwarded_message_handler(client: Client, message: Message):
+    """Handle forwarded messages to detect and set channel"""
+    if not is_authorized(message.from_user.id):
         return
     
-    # Try to set new channel
-    try:
-        new_channel = int(message.command[1])
+    # Check if message is forwarded from a channel
+    if message.forward_from_chat and message.forward_from_chat.type.value == "channel":
+        channel = message.forward_from_chat
+        channel_id = channel.id
+        channel_name = channel.title or "Unknown Channel"
         
-        # Verify the bot has access to the channel
-        try:
-            chat = await client.get_chat(new_channel)
-            channel_name = chat.title or "Unknown"
-            
-            # Test if we can send messages
-            old_channel = current_channel
-            current_channel = new_channel
-            
-            await message.reply_text(
-                f"✅ **Channel Updated!**\n\n"
-                f"**New Channel:** {channel_name}\n"
-                f"**ID:** `{new_channel}`\n\n"
-                f"All uploads will now go to this channel."
-            )
-        except Exception as e:
-            await message.reply_text(
-                f"❌ **Failed to switch channel**\n\n"
-                f"Error: {str(e)[:100]}\n\n"
-                f"Make sure:\n"
-                f"• The channel ID is correct\n"
-                f"• The bot is added to the channel\n"
-                f"• The bot has permission to post"
-            )
-    except ValueError:
+        # Create button to set this channel
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "✅ Set as Upload Channel", 
+                callback_data=f"setchannel_{channel_id}"
+            )],
+            [InlineKeyboardButton(
+                "❌ Cancel", 
+                callback_data="cancel_setchannel"
+            )]
+        ])
+        
         await message.reply_text(
-            f"❌ Invalid channel ID. Must be a number.\n\n"
-            f"Example: `/channel -1001234567890`"
+            f"📺 **Channel Detected!**\n\n"
+            f"**Name:** {channel_name}\n"
+            f"**ID:** `{channel_id}`\n\n"
+            f"⚠️ Make sure the bot is added as **Admin** with permission to post messages.\n\n"
+            f"Click below to set this as your upload channel:",
+            reply_markup=keyboard
         )
+
+
+@app.on_callback_query(filters.regex(r"^setchannel_"))
+async def set_channel_callback(client: Client, callback_query: CallbackQuery):
+    """Handle set channel button click"""
+    global current_channel
+    
+    user_id = callback_query.from_user.id
+    
+    if not is_authorized(user_id):
+        await callback_query.answer("❌ You are not authorized!", show_alert=True)
+        return
+    
+    # Extract channel ID from callback data
+    channel_id = int(callback_query.data.replace("setchannel_", ""))
+    
+    try:
+        # Verify bot has access to the channel
+        chat = await client.get_chat(channel_id)
+        channel_name = chat.title or "Unknown"
+        
+        # Try to get bot's permissions in the channel
+        try:
+            me = await client.get_me()
+            member = await client.get_chat_member(channel_id, me.id)
+            
+            if member.status.value not in ["administrator", "creator"]:
+                await callback_query.answer("⚠️ Bot is not an admin in this channel!", show_alert=True)
+                await callback_query.message.edit_text(
+                    f"❌ **Failed to set channel**\n\n"
+                    f"The bot is not an **Admin** in **{channel_name}**.\n\n"
+                    f"Please add the bot as admin with permission to post messages, then try again."
+                )
+                return
+        except Exception:
+            pass  # Some channels might not allow this check
+        
+        # Set the new channel
+        old_channel = current_channel
+        current_channel = channel_id
+        
+        await callback_query.answer("✅ Channel updated!", show_alert=False)
+        await callback_query.message.edit_text(
+            f"✅ **Upload Channel Updated!**\n\n"
+            f"**Channel:** {channel_name}\n"
+            f"**ID:** `{channel_id}`\n\n"
+            f"All uploads will now go to this channel."
+        )
+        
+    except Exception as e:
+        await callback_query.answer("❌ Failed to access channel!", show_alert=True)
+        await callback_query.message.edit_text(
+            f"❌ **Failed to set channel**\n\n"
+            f"Error: {str(e)[:100]}\n\n"
+            f"Make sure the bot is added as admin to the channel."
+        )
+
+
+@app.on_callback_query(filters.regex(r"^cancel_setchannel$"))
+async def cancel_setchannel_callback(client: Client, callback_query: CallbackQuery):
+    """Handle cancel button for channel selection"""
+    await callback_query.answer("Cancelled", show_alert=False)
+    await callback_query.message.edit_text("❌ Channel selection cancelled.")
 
 
 @app.on_message(filters.command("status"))
