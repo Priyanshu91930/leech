@@ -1,0 +1,34 @@
+# Session files
+*.session
+*.session-journal
+
+# Downloads
+downloads/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Config (keep your credentials safe!)
+config.py
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

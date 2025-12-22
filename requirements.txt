@@ -1,0 +1,31 @@
+# Core Telegram
+pyrotgfork>=2.0.0
+tgcrypto
+
+# Aria2 & Downloads
+aria2p>=0.11.0
+aiohttp
+aiofiles
+
+# Performance (Linux only - will be skipped on Windows)
+uvloop>=0.21.0; sys_platform != 'win32'
+
+# System Monitoring
+psutil
+
+# Speed Test
+speedtest-cli
+
+# YouTube Downloads (optional)
+yt-dlp
+
+# HTTP Requests
+httpx
+requests
+
+# Async Support
+asyncio
+
+# Utilities
+natsort
+pillow
