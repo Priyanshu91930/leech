@@ -97,6 +97,10 @@ BOT_START_TIME = time.time()
 # Current upload channel (can be changed with /channel command)
 current_channel = CHANNEL_ID
 
+# Custom thumbnail path (can be set with /setthumb command)
+THUMB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumb.jpg")
+custom_thumb = THUMB_PATH if os.path.exists(THUMB_PATH) else None
+
 # Track active downloads: {gid: {"message": Message, "start_time": time, "cancelled": bool}}
 active_downloads = {}
 
@@ -355,6 +359,7 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                 await client.send_video(
                     chat_id=channel_id,
                     video=file_path,
+                    thumb=custom_thumb if custom_thumb and os.path.exists(custom_thumb) else None,
                     caption=f"📹 {file_name}",
                     progress=progress_callback,
                     progress_args=(status_message, f"📤 Uploading video: `{file_name}`")
@@ -444,9 +449,11 @@ async def start_command(client: Client, message: Message):
         "• `/status` - Active downloads\n"
         "• `/stats` - System statistics\n"
         "• `/speedtest` - Server speed test\n\n"
-        "**🛠️ Control:**\n"
-        "• `/cancel` - Cancel all downloads\n"
-        "• `/channel` - View/change upload channel\n\n"
+        "**🛠️ Settings:**\n"
+        "• `/channel` - View/change upload channel\n"
+        "• `/setthumb` - Set custom thumbnail\n\n"
+        "**🔧 Control:**\n"
+        "• `/cancel` - Cancel all downloads\n\n"
         f"⏱️ **Uptime:** {uptime}"
     )
 
@@ -574,6 +581,78 @@ async def cancel_setchannel_callback(client: Client, callback_query: CallbackQue
     """Handle cancel button for channel selection"""
     await callback_query.answer("Cancelled", show_alert=False)
     await callback_query.message.edit_text("❌ Channel selection cancelled.")
+
+
+@app.on_message(filters.command("setthumb"))
+async def setthumb_command(client: Client, message: Message):
+    """Set custom thumbnail for uploads"""
+    global custom_thumb
+    
+    if not is_authorized(message.from_user.id):
+        await message.reply_text("❌ You are not authorized to use this bot.")
+        return
+    
+    # Check if replying to a photo
+    if message.reply_to_message and message.reply_to_message.photo:
+        try:
+            # Download the photo
+            photo = message.reply_to_message.photo
+            await client.download_media(photo.file_id, file_name=THUMB_PATH)
+            custom_thumb = THUMB_PATH
+            
+            await message.reply_photo(
+                photo=THUMB_PATH,
+                caption="✅ **Thumbnail Set!**\n\nThis thumbnail will be used for all video uploads."
+            )
+        except Exception as e:
+            await message.reply_text(f"❌ Failed to save thumbnail: {str(e)[:100]}")
+        return
+    
+    # Show current thumbnail status with buttons
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑️ Delete Thumbnail", callback_data="delthumb")]
+    ])
+    
+    if custom_thumb and os.path.exists(custom_thumb):
+        await message.reply_photo(
+            photo=custom_thumb,
+            caption=(
+                "🖼️ **Current Thumbnail**\n\n"
+                "To set a new thumbnail:\n"
+                "Reply to a photo with `/setthumb`"
+            ),
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text(
+            "🖼️ **No Thumbnail Set**\n\n"
+            "To set a thumbnail:\n"
+            "1️⃣ Send a photo\n"
+            "2️⃣ Reply to it with `/setthumb`"
+        )
+
+
+@app.on_callback_query(filters.regex(r"^delthumb$"))
+async def delete_thumb_callback(client: Client, callback_query: CallbackQuery):
+    """Handle delete thumbnail button"""
+    global custom_thumb
+    
+    if not is_authorized(callback_query.from_user.id):
+        await callback_query.answer("❌ You are not authorized!", show_alert=True)
+        return
+    
+    try:
+        if custom_thumb and os.path.exists(custom_thumb):
+            os.remove(custom_thumb)
+        custom_thumb = None
+        
+        await callback_query.answer("✅ Thumbnail deleted!", show_alert=False)
+        await callback_query.message.edit_caption(
+            "✅ **Thumbnail Deleted!**\n\n"
+            "Uploads will now use default thumbnails."
+        )
+    except Exception as e:
+        await callback_query.answer(f"❌ Error: {str(e)[:50]}", show_alert=True)
 
 
 @app.on_message(filters.command("status"))
