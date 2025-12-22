@@ -201,47 +201,61 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
     
     if file_size > MAX_SPLIT_SIZE:
         await safe_edit_text(status_message, f"⚠️ File `{file_name}` is larger than 2GB. Skipping...")
-        return False
+        return False, "File too large"
     
-    try:
-        await safe_edit_text(status_message, f"📤 Uploading: `{file_name}`\n📁 Size: {get_readable_size(file_size)}")
-        
-        # Determine file type and upload accordingly
-        if file_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-            await client.send_video(
-                chat_id=channel_id,
-                video=file_path,
-                caption=f"📹 {file_name}",
-                progress=progress_callback,
-                progress_args=(status_message, f"📤 Uploading video: `{file_name}`")
-            )
-        elif file_name.lower().endswith(('.mp3', '.flac', '.wav', '.aac', '.ogg')):
-            await client.send_audio(
-                chat_id=channel_id,
-                audio=file_path,
-                caption=f"🎵 {file_name}",
-                progress=progress_callback,
-                progress_args=(status_message, f"📤 Uploading audio: `{file_name}`")
-            )
-        elif file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-            await client.send_photo(
-                chat_id=channel_id,
-                photo=file_path,
-                caption=f"🖼️ {file_name}"
-            )
-        else:
-            await client.send_document(
-                chat_id=channel_id,
-                document=file_path,
-                caption=f"📄 {file_name}",
-                progress=progress_callback,
-                progress_args=(status_message, f"📤 Uploading file: `{file_name}`")
-            )
-        
-        return True
-    except Exception as e:
-        await safe_edit_text(status_message, f"❌ Failed to upload `{file_name}`: {str(e)}")
-        return False
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            await safe_edit_text(status_message, f"📤 Uploading: `{file_name}`\n📁 Size: {get_readable_size(file_size)}")
+            
+            # Determine file type and upload accordingly
+            if file_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
+                await client.send_video(
+                    chat_id=channel_id,
+                    video=file_path,
+                    caption=f"📹 {file_name}",
+                    progress=progress_callback,
+                    progress_args=(status_message, f"📤 Uploading video: `{file_name}`")
+                )
+            elif file_name.lower().endswith(('.mp3', '.flac', '.wav', '.aac', '.ogg')):
+                await client.send_audio(
+                    chat_id=channel_id,
+                    audio=file_path,
+                    caption=f"🎵 {file_name}",
+                    progress=progress_callback,
+                    progress_args=(status_message, f"📤 Uploading audio: `{file_name}`")
+                )
+            elif file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                await client.send_photo(
+                    chat_id=channel_id,
+                    photo=file_path,
+                    caption=f"🖼️ {file_name}"
+                )
+            else:
+                await client.send_document(
+                    chat_id=channel_id,
+                    document=file_path,
+                    caption=f"📄 {file_name}",
+                    progress=progress_callback,
+                    progress_args=(status_message, f"📤 Uploading file: `{file_name}`")
+                )
+            
+            return True, None
+        except FloodWait as e:
+            wait_time = e.value
+            await safe_edit_text(status_message, f"⏳ Telegram rate limit. Waiting {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
+            await asyncio.sleep(wait_time)
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Upload error: {error_msg}")
+            if attempt < max_retries - 1:
+                await safe_edit_text(status_message, f"⚠️ Upload failed, retrying... ({attempt + 1}/{max_retries})\nError: {error_msg[:100]}")
+                await asyncio.sleep(3)
+            else:
+                await safe_edit_text(status_message, f"❌ Failed to upload `{file_name}`:\n{error_msg[:200]}")
+                return False, error_msg
+    
+    return False, "Max retries exceeded"
 
 
 async def upload_directory(client: Client, dir_path: str, channel_id: int, status_message: Message):
@@ -252,7 +266,8 @@ async def upload_directory(client: Client, dir_path: str, channel_id: int, statu
     for root, dirs, files in os.walk(dir_path):
         for file in files:
             file_path = os.path.join(root, file)
-            if await upload_file(client, file_path, channel_id, status_message):
+            success, error = await upload_file(client, file_path, channel_id, status_message)
+            if success:
                 uploaded += 1
             else:
                 failed += 1
@@ -509,11 +524,12 @@ async def ytdl_command(client: Client, message: Message):
                     await safe_edit_text(status_msg, f"✅ Downloaded: `{f}`\n📤 Uploading to Telegram...")
                     
                     # Upload to channel
-                    if await upload_file(client, file_path, CHANNEL_ID, status_msg):
+                    success, error = await upload_file(client, file_path, CHANNEL_ID, status_msg)
+                    if success:
                         delete_path(file_path)
                         await safe_edit_text(status_msg, f"✅ **Done!**\n📁 `{f}`")
                     else:
-                        await safe_edit_text(status_msg, f"❌ Failed to upload: `{f}`")
+                        await safe_edit_text(status_msg, f"❌ Failed to upload: `{f}`\n{error[:100] if error else ''}")
                     return
             
             await safe_edit_text(status_msg, "⚠️ Download completed but file not found.")
@@ -713,7 +729,8 @@ async def leech_command(client: Client, message: Message):
                 f"🗑️ Cleaning up..."
             )
         else:
-            if await upload_file(client, actual_path, CHANNEL_ID, status_msg):
+            success, error = await upload_file(client, actual_path, CHANNEL_ID, status_msg)
+            if success:
                 await safe_edit_text(
                     status_msg,
                     f"✅ **Upload Complete!**\n\n"
@@ -722,7 +739,7 @@ async def leech_command(client: Client, message: Message):
                     f"🗑️ Cleaning up..."
                 )
             else:
-                await safe_edit_text(status_msg, f"❌ Failed to upload file.")
+                # Error already shown by upload_file, don't overwrite it
                 return
         
         # Delete files after upload
