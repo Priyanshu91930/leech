@@ -65,6 +65,31 @@ ARIA2_HOST = "http://localhost"
 ARIA2_PORT = 6800
 ARIA2_SECRET = ""  # Set if you have a secret token
 
+# Best public trackers for faster peer discovery (updated regularly from ngosang/trackerslist)
+TRACKERS = [
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonoid.ch:6969/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://wepzone.net:6969/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://tracker.srv00.com:6969/announce",
+    "udp://tracker.qu.ax:6969/announce",
+    "udp://tracker.filemail.com:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://tracker.0x7c0.com:6969/announce",
+    "udp://tracker-udp.gbitt.info:80/announce",
+    "udp://t.overflow.biz:6969/announce",
+    "udp://run.publictracker.xyz:6969/announce",
+    "udp://retracker01-msk-virt.corbina.net:80/announce",
+    "udp://p4p.arenabg.com:1337/announce",
+    "udp://opentracker.io:6969/announce",
+    "udp://open.tracker.cl:1337/announce",
+    "udp://open.dstud.io:6969/announce",
+]
+TRACKERS_STRING = ",".join(TRACKERS)
+
 # ===================== SETUP =====================
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 BOT_START_TIME = time.time()
@@ -543,8 +568,20 @@ async def leech_command(client: Client, message: Message):
                     except Exception:
                         pass
         
-        # Add download to aria2
-        download = aria2.add_magnet(magnet_link, options={"dir": DOWNLOAD_DIR})
+        # Add download to aria2 with optimized options
+        download_options = {
+            "dir": DOWNLOAD_DIR,
+            "bt-tracker": TRACKERS_STRING,
+            "bt-enable-lpd": "true",
+            "enable-peer-exchange": "true",
+            "bt-max-peers": "0",  # Unlimited peers
+            "max-connection-per-server": "16",
+            "split": "16",
+            "min-split-size": "1M",
+            "seed-time": "0",  # Don't seed after download
+            "bt-request-peer-speed-limit": "0",  # No speed limit for peers
+        }
+        download = aria2.add_magnet(magnet_link, options=download_options)
         start_time = time.time()
         
         # Track this download
