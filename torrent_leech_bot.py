@@ -206,33 +206,66 @@ async def progress_callback(current: int, total: int, message: Message, start_te
     await safe_edit_text(message, text)
 
 
-def split_file(file_path: str, split_size: int = MAX_SPLIT_SIZE) -> list:
+async def split_file(file_path: str, status_message: Message, split_size: int = MAX_SPLIT_SIZE) -> list:
     """
-    Split a large file into smaller parts.
+    Split a large file into smaller parts with progress updates.
+    Uses memory-efficient chunked reading (10MB buffer) to avoid OOM.
     Returns a list of paths to the split files.
     """
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
     split_dir = os.path.dirname(file_path)
     
+    # Memory-efficient buffer size (10MB)
+    BUFFER_SIZE = 10 * 1024 * 1024
+    
     parts = []
     part_num = 1
+    total_read = 0
+    last_update = 0
+    
+    num_parts = (file_size + split_size - 1) // split_size  # Calculate total parts
     
     with open(file_path, 'rb') as f:
-        while True:
-            chunk = f.read(split_size)
-            if not chunk:
-                break
-            
-            # Create part filename with padding (part01, part02, etc.) at the beginning
+        while total_read < file_size:
+            # Create part filename
             part_name = f"part{part_num:02d}_{file_name}"
             part_path = os.path.join(split_dir, part_name)
             
-            with open(part_path, 'wb') as part_file:
-                part_file.write(chunk)
+            bytes_for_this_part = 0
             
-            parts.append(part_path)
-            part_num += 1
+            with open(part_path, 'wb') as part_file:
+                while bytes_for_this_part < split_size:
+                    # Read in small chunks to avoid OOM
+                    remaining_for_part = split_size - bytes_for_this_part
+                    to_read = min(BUFFER_SIZE, remaining_for_part)
+                    
+                    chunk = f.read(to_read)
+                    if not chunk:
+                        break
+                    
+                    part_file.write(chunk)
+                    bytes_for_this_part += len(chunk)
+                    total_read += len(chunk)
+                    
+                    # Update progress every 100MB
+                    if total_read - last_update >= 100 * 1024 * 1024:
+                        last_update = total_read
+                        percent = (total_read / file_size) * 100
+                        progress_bar = "█" * int(percent // 5) + "░" * (20 - int(percent // 5))
+                        await safe_edit_text(
+                            status_message,
+                            f"📦 **Splitting large file...**\n\n"
+                            f"📁 `{file_name[:40]}{'...' if len(file_name) > 40 else ''}`\n"
+                            f"📊 [{progress_bar}] {percent:.1f}%\n"
+                            f"📄 Creating part {part_num}/{num_parts}\n"
+                            f"💾 {get_readable_size(total_read)} / {get_readable_size(file_size)}"
+                        )
+                        await asyncio.sleep(0.1)  # Allow other tasks to run
+            
+            if bytes_for_this_part > 0:
+                parts.append(part_path)
+                part_num += 1
     
     return parts
 
@@ -247,8 +280,8 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
         await safe_edit_text(status_message, f"📦 File `{file_name}` is larger than 2GB. Splitting into parts...")
         
         try:
-            # Split the file
-            parts = split_file(file_path)
+            # Split the file (memory-efficient with progress)
+            parts = await split_file(file_path, status_message)
             total_parts = len(parts)
             
             await safe_edit_text(status_message, f"✅ Split into {total_parts} parts. Starting upload...")
