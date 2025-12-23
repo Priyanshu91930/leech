@@ -1260,38 +1260,56 @@ async def leech_command(client: Client, message: Message):
             while clean_name.startswith("[") and "]" in clean_name:
                 clean_name = clean_name[clean_name.index("]") + 1:].strip()
             
-            # Normalize special characters (+ becomes space)
-            clean_name_normalized = clean_name.replace("+", " ")
+            # Helper function to normalize names for comparison
+            def normalize_name(name):
+                """Normalize name by replacing separators with spaces and lowercasing"""
+                result = name.lower()
+                # Replace common separators with spaces
+                for sep in ['+', '.', '_', '-']:
+                    result = result.replace(sep, ' ')
+                # Remove extra spaces
+                while '  ' in result:
+                    result = result.replace('  ', ' ')
+                return result.strip()
+            
+            # Create normalized versions for comparison
+            clean_name_normalized = normalize_name(clean_name)
             search_variants = [
                 real_name.lower(),
                 clean_name.lower(),
-                clean_name_normalized.lower()
+                clean_name_normalized
             ]
             
             for item in os.listdir(DOWNLOAD_DIR):
-                item_lower = item.lower()
                 item_path = os.path.join(DOWNLOAD_DIR, item)
                 # Skip aria2 control files
                 if item.endswith('.aria2'):
                     continue
                 
-                # Normalize item name too
-                item_normalized = item.lower().replace("+", " ")
+                # Normalize item name for comparison
+                item_normalized = normalize_name(item)
+                item_lower = item.lower()
                 
                 # Check various matches
                 for variant in search_variants:
-                    # Exact match
-                    if item_lower == variant or item_normalized == variant:
+                    variant_normalized = normalize_name(variant)
+                    
+                    # Exact match (normalized)
+                    if item_normalized == variant_normalized:
                         actual_path = item_path
                         break
-                    # Partial match - check if significant part of name matches
-                    name_part = variant[:30] if len(variant) > 30 else variant
-                    if name_part in item_lower or name_part in item_normalized:
+                    # Exact match (lower case)
+                    if item_lower == variant:
                         actual_path = item_path
                         break
-                    # Reverse check - if item is contained in name
-                    item_part = item_normalized[:30] if len(item_normalized) > 30 else item_normalized
-                    if item_part in variant:
+                    # Partial match - check if significant part of normalized name matches
+                    name_part = variant_normalized[:25] if len(variant_normalized) > 25 else variant_normalized
+                    if name_part and name_part in item_normalized:
+                        actual_path = item_path
+                        break
+                    # Reverse check - if item name part is contained in variant
+                    item_part = item_normalized[:25] if len(item_normalized) > 25 else item_normalized
+                    if item_part and item_part in variant_normalized:
                         actual_path = item_path
                         break
                 
