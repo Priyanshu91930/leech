@@ -1224,22 +1224,47 @@ async def leech_command(client: Client, message: Message):
         # Method 3: Search for files/folders containing the torrent name
         # This helps when aria2 file paths are not available
         if not actual_path and real_name:
-            # Search for exact match first, then partial match
-            search_name = real_name.lower()
+            # Strip common prefix patterns like [1337x.HashHackers.Com] or [YIFY]
+            clean_name = real_name
+            while clean_name.startswith("[") and "]" in clean_name:
+                clean_name = clean_name[clean_name.index("]") + 1:].strip()
+            
+            # Normalize special characters (+ becomes space)
+            clean_name_normalized = clean_name.replace("+", " ")
+            search_variants = [
+                real_name.lower(),
+                clean_name.lower(),
+                clean_name_normalized.lower()
+            ]
+            
             for item in os.listdir(DOWNLOAD_DIR):
                 item_lower = item.lower()
                 item_path = os.path.join(DOWNLOAD_DIR, item)
                 # Skip aria2 control files
                 if item.endswith('.aria2'):
                     continue
-                # Exact match (case-insensitive)
-                if item_lower == search_name:
-                    actual_path = item_path
-                    break
-                # Check if item contains a significant part of the name (first 30 chars)
-                name_part = search_name[:30] if len(search_name) > 30 else search_name
-                if name_part in item_lower:
-                    actual_path = item_path
+                
+                # Normalize item name too
+                item_normalized = item.lower().replace("+", " ")
+                
+                # Check various matches
+                for variant in search_variants:
+                    # Exact match
+                    if item_lower == variant or item_normalized == variant:
+                        actual_path = item_path
+                        break
+                    # Partial match - check if significant part of name matches
+                    name_part = variant[:30] if len(variant) > 30 else variant
+                    if name_part in item_lower or name_part in item_normalized:
+                        actual_path = item_path
+                        break
+                    # Reverse check - if item is contained in name
+                    item_part = item_normalized[:30] if len(item_normalized) > 30 else item_normalized
+                    if item_part in variant:
+                        actual_path = item_path
+                        break
+                
+                if actual_path:
                     break
         
         # If still not found, report error with debug info
