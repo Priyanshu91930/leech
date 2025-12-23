@@ -1059,7 +1059,7 @@ async def stats_command(client: Client, message: Message):
 @app.on_message(filters.command("speedtest"))
 async def speedtest_command(client: Client, message: Message):
     """Run server speed test"""
-    if not is_authorized(message.from_user.id):
+    if not message.from_user or not is_authorized(message.from_user.id):
         await message.reply_text("❌ You are not authorized to use this bot.")
         return
     
