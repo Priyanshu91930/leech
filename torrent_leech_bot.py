@@ -1181,17 +1181,16 @@ async def leech_command(client: Client, message: Message):
             del active_downloads[download.gid]
         
         # Download complete - find the actual downloaded files
-        # Use aria2's download.dir property to get the exact download directory
         actual_path = None
         
-        # Method 1: Use aria2's dir property combined with torrent name (most reliable)
-        if download.dir and download.name:
-            expected_path = os.path.join(download.dir, download.name)
-            if os.path.exists(expected_path):
-                actual_path = expected_path
+        # Get the real torrent name (strip [METADATA] prefix if present)
+        real_name = download.name
+        if real_name and real_name.startswith("[METADATA]"):
+            real_name = real_name.replace("[METADATA]", "", 1).strip()
         
-        # Method 2: Check aria2's reported file paths and find common parent
-        if not actual_path and download.files:
+        # Method 1: Check aria2's reported file paths (MOST RELIABLE)
+        # This uses the actual files aria2 downloaded
+        if download.files:
             valid_files = [f.path for f in download.files if f.path and os.path.exists(f.path)]
             if valid_files:
                 # If single file, use it directly
@@ -1199,23 +1198,32 @@ async def leech_command(client: Client, message: Message):
                     actual_path = valid_files[0]
                 else:
                     # Multiple files - find common parent directory
-                    # Check if they share a common parent folder (torrent folder)
                     first_file = valid_files[0]
                     parent_dir = os.path.dirname(first_file)
-                    # Check if parent is a subdirectory of DOWNLOAD_DIR
-                    if parent_dir != DOWNLOAD_DIR and os.path.dirname(parent_dir) == DOWNLOAD_DIR:
+                    # Check if parent is a subdirectory of DOWNLOAD_DIR (torrent folder)
+                    if parent_dir != DOWNLOAD_DIR and DOWNLOAD_DIR in parent_dir:
                         actual_path = parent_dir
-                    elif parent_dir == DOWNLOAD_DIR:
-                        # Files are directly in download dir, use download name as folder
-                        expected_folder = os.path.join(DOWNLOAD_DIR, download.name)
-                        if os.path.exists(expected_folder):
-                            actual_path = expected_folder
-                        else:
-                            actual_path = valid_files[0]  # Fallback to first file
+                    else:
+                        # Files are directly in download dir, upload them individually
+                        # Use the first file and let upload_directory handle the rest
+                        actual_path = valid_files[0]
         
-        # If still not found, report error (do NOT scan entire directory - this causes wrong file uploads)
+        # Method 2: Use aria2's dir property combined with torrent name
+        if not actual_path and download.dir:
+            # Try with real name (without METADATA prefix)
+            if real_name:
+                expected_path = os.path.join(download.dir, real_name)
+                if os.path.exists(expected_path):
+                    actual_path = expected_path
+            # Try with original name
+            if not actual_path and download.name:
+                expected_path = os.path.join(download.dir, download.name)
+                if os.path.exists(expected_path):
+                    actual_path = expected_path
+        
+        # If still not found, report error
         if not actual_path or not os.path.exists(actual_path):
-            await safe_edit_text(status_msg, f"❌ Error: Downloaded files not found for `{download.name}`\nExpected path: {download.dir}/{download.name}")
+            await safe_edit_text(status_msg, f"❌ Error: Downloaded files not found for `{real_name}`\nPlease check if download completed successfully.")
             return
         
         await safe_edit_text(
