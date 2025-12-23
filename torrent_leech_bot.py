@@ -537,7 +537,7 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                 await client.send_document(
                     chat_id=channel_id,
                     document=file_path,
-                    thumb=custom_thumb if custom_thumb and os.path.exists(custom_thumb) else None,
+                    thumb=None,  # Disabled thumbnail temporarily for testing
                     caption=f"🎬 {file_name}",
                     progress=progress_callback,
                     progress_args=(status_message, f"📤 Uploading: `{file_name}`", upload_id)
