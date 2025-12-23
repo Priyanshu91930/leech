@@ -323,6 +323,14 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
     
+    # Pre-fetch channel to ensure peer is cached (fixes "Peer id invalid" error)
+    try:
+        await client.get_chat(channel_id)
+    except Exception as e:
+        # If we can't access the channel, report error
+        await safe_edit_text(status_message, f"❌ Cannot access channel {channel_id}. Error: {str(e)[:100]}")
+        return False, f"Channel access error: {e}"
+    
     # If file is larger than 2GB, split it into parts
     if file_size > MAX_SPLIT_SIZE:
         # Generate upload ID for split file upload (if not already using a parent one)
