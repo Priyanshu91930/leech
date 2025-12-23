@@ -1221,9 +1221,36 @@ async def leech_command(client: Client, message: Message):
                 if os.path.exists(expected_path):
                     actual_path = expected_path
         
-        # If still not found, report error
+        # Method 3: Search for files/folders containing the torrent name
+        # This helps when aria2 file paths are not available
+        if not actual_path and real_name:
+            # Search for exact match first, then partial match
+            search_name = real_name.lower()
+            for item in os.listdir(DOWNLOAD_DIR):
+                item_lower = item.lower()
+                item_path = os.path.join(DOWNLOAD_DIR, item)
+                # Skip aria2 control files
+                if item.endswith('.aria2'):
+                    continue
+                # Exact match (case-insensitive)
+                if item_lower == search_name:
+                    actual_path = item_path
+                    break
+                # Check if item contains a significant part of the name (first 30 chars)
+                name_part = search_name[:30] if len(search_name) > 30 else search_name
+                if name_part in item_lower:
+                    actual_path = item_path
+                    break
+        
+        # If still not found, report error with debug info
         if not actual_path or not os.path.exists(actual_path):
-            await safe_edit_text(status_msg, f"❌ Error: Downloaded files not found for `{real_name}`\nPlease check if download completed successfully.")
+            # List what's in the download directory for debugging
+            try:
+                items = os.listdir(DOWNLOAD_DIR)
+                items_str = ", ".join(items[:5]) if items else "empty"
+            except Exception:
+                items_str = "error listing"
+            await safe_edit_text(status_msg, f"❌ Error: Downloaded files not found for `{real_name}`\nDownload dir contains: {items_str}")
             return
         
         await safe_edit_text(
