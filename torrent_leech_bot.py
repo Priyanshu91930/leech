@@ -1181,35 +1181,41 @@ async def leech_command(client: Client, message: Message):
             del active_downloads[download.gid]
         
         # Download complete - find the actual downloaded files
+        # Use aria2's download.dir property to get the exact download directory
         actual_path = None
         
-        # Method 1: Check aria2's reported file paths
-        if download.files:
-            for file in download.files:
-                if file.path and os.path.exists(file.path):
-                    actual_path = file.path
-                    break
+        # Method 1: Use aria2's dir property combined with torrent name (most reliable)
+        if download.dir and download.name:
+            expected_path = os.path.join(download.dir, download.name)
+            if os.path.exists(expected_path):
+                actual_path = expected_path
         
-        # Method 2: Check for folder with torrent name in DOWNLOAD_DIR
-        if not actual_path or not os.path.exists(actual_path):
-            torrent_folder = os.path.join(DOWNLOAD_DIR, download.name)
-            if os.path.exists(torrent_folder):
-                actual_path = torrent_folder
+        # Method 2: Check aria2's reported file paths and find common parent
+        if not actual_path and download.files:
+            valid_files = [f.path for f in download.files if f.path and os.path.exists(f.path)]
+            if valid_files:
+                # If single file, use it directly
+                if len(valid_files) == 1:
+                    actual_path = valid_files[0]
+                else:
+                    # Multiple files - find common parent directory
+                    # Check if they share a common parent folder (torrent folder)
+                    first_file = valid_files[0]
+                    parent_dir = os.path.dirname(first_file)
+                    # Check if parent is a subdirectory of DOWNLOAD_DIR
+                    if parent_dir != DOWNLOAD_DIR and os.path.dirname(parent_dir) == DOWNLOAD_DIR:
+                        actual_path = parent_dir
+                    elif parent_dir == DOWNLOAD_DIR:
+                        # Files are directly in download dir, use download name as folder
+                        expected_folder = os.path.join(DOWNLOAD_DIR, download.name)
+                        if os.path.exists(expected_folder):
+                            actual_path = expected_folder
+                        else:
+                            actual_path = valid_files[0]  # Fallback to first file
         
-        # Method 3: Scan DOWNLOAD_DIR for any new files/folders
+        # If still not found, report error (do NOT scan entire directory - this causes wrong file uploads)
         if not actual_path or not os.path.exists(actual_path):
-            for item in os.listdir(DOWNLOAD_DIR):
-                item_path = os.path.join(DOWNLOAD_DIR, item)
-                # Skip aria2 control files
-                if not item.endswith('.aria2'):
-                    actual_path = item_path
-                    break
-        
-        # If still not found, report error
-        if not actual_path or not os.path.exists(actual_path):
-            await safe_edit_text(status_msg, f"❌ Error: Downloaded files not found in {DOWNLOAD_DIR}")
-            if download.gid in active_downloads:
-                del active_downloads[download.gid]
+            await safe_edit_text(status_msg, f"❌ Error: Downloaded files not found for `{download.name}`\nExpected path: {download.dir}/{download.name}")
             return
         
         await safe_edit_text(
