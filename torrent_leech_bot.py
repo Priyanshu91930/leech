@@ -454,14 +454,39 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
             
             # Determine file type and upload accordingly
             if file_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-                await client.send_video(
-                    chat_id=channel_id,
-                    video=file_path,
-                    thumb=custom_thumb if custom_thumb and os.path.exists(custom_thumb) else None,
-                    caption=f"📹 {file_name}",
-                    progress=progress_callback,
-                    progress_args=(status_message, f"📤 Uploading video: `{file_name}`", upload_id)
-                )
+                # Try with thumbnail first, fallback to without if it fails
+                thumb_to_use = None
+                if custom_thumb and os.path.exists(custom_thumb):
+                    try:
+                        # Validate thumbnail file
+                        thumb_size = os.path.getsize(custom_thumb)
+                        if thumb_size > 0 and thumb_size < 10 * 1024 * 1024:  # Max 10MB
+                            thumb_to_use = custom_thumb
+                    except Exception:
+                        thumb_to_use = None
+                
+                try:
+                    await client.send_video(
+                        chat_id=channel_id,
+                        video=file_path,
+                        thumb=thumb_to_use,
+                        caption=f"🎥 {file_name}",
+                        progress=progress_callback,
+                        progress_args=(status_message, f"📤 Uploading video: `{file_name}`", upload_id)
+                    )
+                except Exception as thumb_err:
+                    # If thumbnail caused the error, retry without it
+                    if thumb_to_use and ("thumb" in str(thumb_err).lower() or "photo" in str(thumb_err).lower()):
+                        await client.send_video(
+                            chat_id=channel_id,
+                            video=file_path,
+                            thumb=None,
+                            caption=f"🎥 {file_name}",
+                            progress=progress_callback,
+                            progress_args=(status_message, f"📤 Uploading video: `{file_name}`", upload_id)
+                        )
+                    else:
+                        raise thumb_err
             elif file_name.lower().endswith(('.mp3', '.flac', '.wav', '.aac', '.ogg')):
                 await client.send_audio(
                     chat_id=channel_id,
@@ -1104,12 +1129,18 @@ async def leech_command(client: Client, message: Message):
         download = aria2.add_magnet(magnet_link, options=download_options)
         start_time = time.time()
         
-        # Track this download
+        # Track this download with info_hash for reliable file matching later
+        info_hash = None
+        if hasattr(download, 'info_hash') and download.info_hash:
+            info_hash = download.info_hash
+        
         active_downloads[download.gid] = {
             "message": status_msg,
             "start_time": start_time,
             "cancelled": False,
-            "user_id": message.from_user.id
+            "user_id": message.from_user.id,
+            "info_hash": info_hash,
+            "expected_name": download.name if download.name else None
         }
         
         await safe_edit_text(
