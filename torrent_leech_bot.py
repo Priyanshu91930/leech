@@ -1545,13 +1545,60 @@ async def cancel_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.answer("⚠️ Download not found or already completed.", show_alert=True)
 
 # ===================== STARTUP =====================
+async def on_startup():
+    """Runs when bot starts - caches channel peer to fix 'Peer id invalid' error"""
+    global current_channel
+    logger.info("Running startup tasks...")
+    
+    # Cache the channel peer - this fixes "Peer id invalid" error
+    if CHANNEL_ID:
+        try:
+            logger.info(f"Caching channel peer: {CHANNEL_ID}")
+            # Method 1: Try get_chat (works if bot is admin in channel)
+            chat = await app.get_chat(CHANNEL_ID)
+            logger.info(f"✅ Channel cached successfully: {chat.title if hasattr(chat, 'title') else CHANNEL_ID}")
+            current_channel = CHANNEL_ID
+        except Exception as e:
+            logger.warning(f"get_chat failed: {e}")
+            try:
+                # Method 2: Try resolve_peer
+                await app.resolve_peer(CHANNEL_ID)
+                logger.info(f"✅ Channel resolved via resolve_peer: {CHANNEL_ID}")
+                current_channel = CHANNEL_ID
+            except Exception as e2:
+                logger.error(f"Failed to cache channel {CHANNEL_ID}: {e2}")
+                logger.error("Upload to channel may fail. Use /channel command to set channel after forwarding a message from it.")
+    
+    logger.info("Startup tasks completed!")
+
+
 if __name__ == "__main__":
     print("🚀 Starting Torrent Leech Bot...")
+    logger.info("Starting Torrent Leech Bot...")
     
     if not init_aria2():
         print("\n⚠️ Please start aria2 with RPC enabled and try again.")
         print("Run: aria2c --enable-rpc --rpc-listen-all=true --rpc-allow-origin-all --max-connection-per-server=16 --split=16 --min-split-size=1M")
         exit(1)
     
-    print("✅ Bot is running!")
-    app.run()
+    # Register startup handler
+    @app.on_message(filters.command("start") & filters.private, group=-1)
+    async def startup_trigger(client, message):
+        """Triggers on first /start to run startup tasks"""
+        pass
+    
+    # Run startup tasks when bot connects
+    async def start_bot():
+        await app.start()
+        await on_startup()
+        logger.info("✅ Bot is running!")
+        print("✅ Bot is running!")
+        await asyncio.Event().wait()  # Keep running
+    
+    try:
+        asyncio.get_event_loop().run_until_complete(start_bot())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
+        raise
