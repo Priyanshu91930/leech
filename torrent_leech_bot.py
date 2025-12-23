@@ -318,33 +318,60 @@ async def split_file(file_path: str, status_message: Message, split_size: int = 
     return parts
 
 
-async def upload_file(client: Client, file_path: str, channel_id: int, status_message: Message):
+async def upload_file(client: Client, file_path: str, channel_id: int, status_message: Message, parent_upload_id: str = None):
     """Upload a single file to Telegram channel"""
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
     
     # If file is larger than 2GB, split it into parts
     if file_size > MAX_SPLIT_SIZE:
-        await safe_edit_text(status_message, f"📦 File `{file_name}` is larger than 2GB. Splitting into parts...")
+        # Generate upload ID for split file upload (if not already using a parent one)
+        upload_id = parent_upload_id or f"up_{int(time.time())}_{os.path.basename(file_path)[:20]}"
+        if upload_id not in active_uploads:
+            active_uploads[upload_id] = {"cancelled": False, "file": file_name}
+        
+        # Create cancel button for split upload
+        cancel_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel Upload", callback_data=f"cancelup_{upload_id}")]
+        ])
+        
+        await safe_edit_text(status_message, f"📦 File `{file_name}` is larger than 2GB. Splitting into parts...", reply_markup=cancel_markup)
         
         try:
+            # Check if cancelled before splitting
+            if active_uploads.get(upload_id, {}).get("cancelled"):
+                return False, "Upload cancelled"
+            
             # Split the file (memory-efficient with progress)
             parts = await split_file(file_path, status_message)
             total_parts = len(parts)
             
-            await safe_edit_text(status_message, f"✅ Split into {total_parts} parts. Starting upload...")
+            await safe_edit_text(status_message, f"✅ Split into {total_parts} parts. Starting upload...", reply_markup=cancel_markup)
             
             uploaded_parts = 0
             failed_parts = 0
             
             for i, part_path in enumerate(parts, 1):
+                # Check if cancelled before each part
+                if active_uploads.get(upload_id, {}).get("cancelled"):
+                    # Clean up remaining part files
+                    for remaining_part in parts[i-1:]:
+                        try:
+                            os.remove(remaining_part)
+                        except Exception:
+                            pass
+                    if upload_id in active_uploads:
+                        del active_uploads[upload_id]
+                    return False, "Upload cancelled"
+                
                 part_name = os.path.basename(part_path)
                 part_size = os.path.getsize(part_path)
                 
                 await safe_edit_text(
                     status_message, 
                     f"📤 Uploading part {i}/{total_parts}: `{part_name}`\n"
-                    f"📁 Size: {get_readable_size(part_size)}"
+                    f"📁 Size: {get_readable_size(part_size)}",
+                    reply_markup=cancel_markup
                 )
                 
                 # Upload part as document
@@ -352,12 +379,16 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                 success = False
                 for attempt in range(max_retries):
                     try:
+                        # Check if cancelled
+                        if active_uploads.get(upload_id, {}).get("cancelled"):
+                            raise Exception("Upload cancelled by user")
+                        
                         await client.send_document(
                             chat_id=channel_id,
                             document=part_path,
                             caption=f"📄 {part_name} (Part {i}/{total_parts})",
                             progress=progress_callback,
-                            progress_args=(status_message, f"📤 Uploading: `{part_name}` (Part {i}/{total_parts})")
+                            progress_args=(status_message, f"📤 Uploading: `{part_name}` (Part {i}/{total_parts})", upload_id)
                         )
                         success = True
                         uploaded_parts += 1
@@ -365,6 +396,16 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                     except FloodWait as e:
                         await asyncio.sleep(e.value)
                     except Exception as e:
+                        if "cancelled" in str(e).lower():
+                            # Clean up remaining part files
+                            for remaining_part in parts[i-1:]:
+                                try:
+                                    os.remove(remaining_part)
+                                except Exception:
+                                    pass
+                            if upload_id in active_uploads:
+                                del active_uploads[upload_id]
+                            return False, "Upload cancelled"
                         if attempt < max_retries - 1:
                             await asyncio.sleep(3)
                         else:
@@ -383,11 +424,17 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
             except Exception:
                 pass
             
+            # Clean up upload tracking
+            if upload_id in active_uploads:
+                del active_uploads[upload_id]
+            
             if failed_parts > 0:
                 return False, f"Failed to upload {failed_parts} parts"
             return True, None
             
         except Exception as e:
+            if upload_id in active_uploads:
+                del active_uploads[upload_id]
             return False, f"Failed to split file: {str(e)}"
     
     # Generate unique upload ID for cancellation
@@ -464,17 +511,54 @@ async def upload_directory(client: Client, dir_path: str, channel_id: int, statu
     """Upload all files in a directory to Telegram channel"""
     uploaded = 0
     failed = 0
+    cancelled = False
     
+    # Generate a shared upload ID for the entire directory upload
+    dir_upload_id = f"up_{int(time.time())}_dir_{os.path.basename(dir_path)[:15]}"
+    active_uploads[dir_upload_id] = {"cancelled": False, "file": os.path.basename(dir_path)}
+    
+    # Get all files first
+    all_files = []
     for root, dirs, files in os.walk(dir_path):
         for file in files:
-            file_path = os.path.join(root, file)
-            success, error = await upload_file(client, file_path, channel_id, status_message)
-            if success:
-                uploaded += 1
-            else:
-                failed += 1
+            all_files.append(os.path.join(root, file))
     
-    return uploaded, failed
+    total_files = len(all_files)
+    
+    for idx, file_path in enumerate(all_files, 1):
+        # Check if cancelled
+        if active_uploads.get(dir_upload_id, {}).get("cancelled"):
+            cancelled = True
+            break
+        
+        # Update status with cancel button
+        cancel_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel Upload", callback_data=f"cancelup_{dir_upload_id}")]
+        ])
+        file_name = os.path.basename(file_path)
+        await safe_edit_text(
+            status_message,
+            f"📤 Uploading file {idx}/{total_files}: `{file_name}`",
+            reply_markup=cancel_markup
+        )
+        
+        success, error = await upload_file(client, file_path, channel_id, status_message, dir_upload_id)
+        if success:
+            uploaded += 1
+        else:
+            if "cancelled" in str(error).lower():
+                cancelled = True
+                break
+            failed += 1
+    
+    # Clean up upload tracking
+    if dir_upload_id in active_uploads:
+        del active_uploads[dir_upload_id]
+    
+    if cancelled:
+        return uploaded, failed, True  # Return cancelled flag
+    
+    return uploaded, failed, False
 
 
 def delete_path(path: str):
@@ -1138,16 +1222,25 @@ async def leech_command(client: Client, message: Message):
         
         # Upload to Telegram
         if os.path.isdir(actual_path):
-            uploaded, failed = await upload_directory(client, actual_path, current_channel, status_msg)
+            uploaded, failed, cancelled = await upload_directory(client, actual_path, current_channel, status_msg)
             
-            await safe_edit_text(
-                status_msg,
-                f"✅ **Upload Complete!**\n\n"
-                f"📁 `{download.name}`\n"
-                f"✅ Uploaded: {uploaded} file(s)\n"
-                f"❌ Failed: {failed} file(s)\n\n"
-                f"🗑️ Cleaning up..."
-            )
+            if cancelled:
+                await safe_edit_text(
+                    status_msg,
+                    f"❌ **Upload Cancelled!**\n\n"
+                    f"📁 `{download.name}`\n"
+                    f"✅ Uploaded: {uploaded} file(s) before cancel\n"
+                    f"🗑️ Cleaning up..."
+                )
+            else:
+                await safe_edit_text(
+                    status_msg,
+                    f"✅ **Upload Complete!**\n\n"
+                    f"📁 `{download.name}`\n"
+                    f"✅ Uploaded: {uploaded} file(s)\n"
+                    f"❌ Failed: {failed} file(s)\n\n"
+                    f"🗑️ Cleaning up..."
+                )
         else:
             success, error = await upload_file(client, actual_path, current_channel, status_msg)
             if success:
@@ -1159,8 +1252,16 @@ async def leech_command(client: Client, message: Message):
                     f"🗑️ Cleaning up..."
                 )
             else:
-                # Error already shown by upload_file, don't overwrite it
-                return
+                if error and "cancelled" in error.lower():
+                    await safe_edit_text(
+                        status_msg,
+                        f"❌ **Upload Cancelled!**\n\n"
+                        f"📁 `{download.name}`\n"
+                        f"🗑️ Cleaning up..."
+                    )
+                else:
+                    # Error already shown by upload_file, don't overwrite it
+                    return
         
         # Delete files after upload
         await asyncio.sleep(2)
