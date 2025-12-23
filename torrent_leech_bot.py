@@ -12,6 +12,27 @@ import shutil
 import re
 import time
 import platform
+import logging
+
+# ===================== LOGGING SETUP =====================
+# Create logs directory
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "leech_bot.log")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info("=" * 50)
+logger.info("Bot starting up...")
+
 
 # Try to use uvloop on Linux for better performance
 try:
@@ -525,15 +546,17 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
             return True, None
         except FloodWait as e:
             wait_time = e.value
+            logger.warning(f"FloodWait: {wait_time}s for file {file_name}")
             await safe_edit_text(status_message, f"⏳ Telegram rate limit. Waiting {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
             await asyncio.sleep(wait_time)
         except Exception as e:
             error_msg = str(e)
-            print(f"Upload error: {error_msg}")
+            logger.error(f"Upload error for {file_name}: {error_msg}")
             if attempt < max_retries - 1:
                 await safe_edit_text(status_message, f"⚠️ Upload failed, retrying... ({attempt + 1}/{max_retries})\nError: {error_msg[:100]}")
                 await asyncio.sleep(3)
             else:
+                logger.error(f"Upload FAILED after {max_retries} retries: {file_name} - {error_msg}")
                 await safe_edit_text(status_message, f"❌ Failed to upload `{file_name}`:\n{error_msg[:200]}")
                 return False, error_msg
     
@@ -542,8 +565,10 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
 
 async def upload_directory(client: Client, dir_path: str, channel_id: int, status_message: Message):
     """Upload all files in a directory to Telegram channel"""
+    logger.info(f"Starting directory upload: {dir_path}")
     uploaded = 0
     failed = 0
+    failed_files = []  # Track which files failed
     cancelled = False
     
     # Generate a shared upload ID for the entire directory upload
@@ -557,10 +582,12 @@ async def upload_directory(client: Client, dir_path: str, channel_id: int, statu
             all_files.append(os.path.join(root, file))
     
     total_files = len(all_files)
+    logger.info(f"Found {total_files} files to upload in {dir_path}")
     
     for idx, file_path in enumerate(all_files, 1):
         # Check if cancelled
         if active_uploads.get(dir_upload_id, {}).get("cancelled"):
+            logger.info("Directory upload cancelled by user")
             cancelled = True
             break
         
@@ -575,18 +602,29 @@ async def upload_directory(client: Client, dir_path: str, channel_id: int, statu
             reply_markup=cancel_markup
         )
         
+        logger.info(f"Uploading file {idx}/{total_files}: {file_name}")
         success, error = await upload_file(client, file_path, channel_id, status_message, dir_upload_id)
         if success:
+            logger.info(f"✓ Upload SUCCESS: {file_name}")
             uploaded += 1
         else:
             if "cancelled" in str(error).lower():
+                logger.info("Upload cancelled")
                 cancelled = True
                 break
+            logger.error(f"✗ Upload FAILED: {file_name} - {error}")
+            failed_files.append((file_name, error))
             failed += 1
     
     # Clean up upload tracking
     if dir_upload_id in active_uploads:
         del active_uploads[dir_upload_id]
+    
+    # Log summary
+    logger.info(f"Directory upload complete: {uploaded} success, {failed} failed")
+    if failed_files:
+        for fname, err in failed_files:
+            logger.error(f"  Failed file: {fname} - {err}")
     
     if cancelled:
         return uploaded, failed, True  # Return cancelled flag
