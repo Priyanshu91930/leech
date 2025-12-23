@@ -344,13 +344,27 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
     
-    # Pre-fetch channel to ensure peer is cached (fixes "Peer id invalid" error)
+    # Ensure channel peer is resolved and cached
+    # This fixes "Peer id invalid" error when session doesn't have channel cached
     try:
-        await client.get_chat(channel_id)
+        # Try resolve_peer first (most reliable way to resolve channel)
+        try:
+            await client.resolve_peer(channel_id)
+            logger.info(f"Channel {channel_id} resolved successfully")
+        except Exception as resolve_err:
+            logger.warning(f"resolve_peer failed: {resolve_err}, trying get_chat...")
+            # Fallback to get_chat
+            try:
+                await client.get_chat(channel_id)
+                logger.info(f"Channel {channel_id} accessed via get_chat")
+            except Exception as chat_err:
+                logger.error(f"Both resolve_peer and get_chat failed for channel {channel_id}")
+                logger.error(f"  resolve_peer error: {resolve_err}")
+                logger.error(f"  get_chat error: {chat_err}")
+                # Don't return error yet - try to upload anyway, Pyrogram might resolve it
+                logger.info("Attempting upload anyway...")
     except Exception as e:
-        # If we can't access the channel, report error
-        await safe_edit_text(status_message, f"❌ Cannot access channel {channel_id}. Error: {str(e)[:100]}")
-        return False, f"Channel access error: {e}"
+        logger.error(f"Channel resolution error: {e}")
     
     # If file is larger than 2GB, split it into parts
     if file_size > MAX_SPLIT_SIZE:
