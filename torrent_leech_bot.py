@@ -575,12 +575,27 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
             logger.warning(f"FloodWait: {wait_time}s for file {file_name}")
             await safe_edit_text(status_message, f"⏳ Telegram rate limit. Waiting {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
             await asyncio.sleep(wait_time)
+        except (ConnectionResetError, ConnectionError, OSError) as e:
+            # Connection lost - wait longer and retry
+            error_msg = str(e)
+            logger.error(f"Connection error for {file_name}: {error_msg}")
+            if attempt < max_retries - 1:
+                wait_time = 10 * (attempt + 1)  # Progressive delay: 10s, 20s, 30s
+                await safe_edit_text(status_message, f"🔄 Connection lost, reconnecting in {wait_time}s... ({attempt + 1}/{max_retries})")
+                await asyncio.sleep(wait_time)
+                # Force garbage collection to free memory
+                import gc
+                gc.collect()
+            else:
+                logger.error(f"Upload FAILED after {max_retries} retries (connection error): {file_name}")
+                await safe_edit_text(status_message, f"❌ Connection failed for `{file_name}`")
+                return False, f"Connection error: {error_msg}"
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Upload error for {file_name}: {error_msg}")
             if attempt < max_retries - 1:
                 await safe_edit_text(status_message, f"⚠️ Upload failed, retrying... ({attempt + 1}/{max_retries})\nError: {error_msg[:100]}")
-                await asyncio.sleep(3)
+                await asyncio.sleep(5)
             else:
                 logger.error(f"Upload FAILED after {max_retries} retries: {file_name} - {error_msg}")
                 await safe_edit_text(status_message, f"❌ Failed to upload `{file_name}`:\n{error_msg[:200]}")
