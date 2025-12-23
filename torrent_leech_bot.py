@@ -875,7 +875,7 @@ async def status_command(client: Client, message: Message):
 
 @app.on_message(filters.command("cancel"))
 async def cancel_command(client: Client, message: Message):
-    """Cancel all downloads"""
+    """Cancel all downloads and uploads"""
     if not is_authorized(message.from_user.id):
         await message.reply_text("❌ You are not authorized to use this bot.")
         return
@@ -885,20 +885,40 @@ async def cancel_command(client: Client, message: Message):
         return
     
     try:
+        # Cancel all aria2 downloads (active, waiting, paused, AND completed)
         downloads = aria2.get_downloads()
-        cancelled = 0
+        cancelled_downloads = 0
         for d in downloads:
-            if d.is_active or d.is_waiting:
-                d.remove(force=True)
-                cancelled += 1
+            try:
+                d.remove(force=True, files=True)
+                cancelled_downloads += 1
+            except Exception:
+                pass
         
-        # Also mark active downloads as cancelled
+        # Purge aria2 results (removes completed/errored downloads from list)
+        try:
+            aria2.purge()
+        except Exception:
+            pass
+        
+        # Mark all active downloads as cancelled
         for gid in list(active_downloads.keys()):
             active_downloads[gid]["cancelled"] = True
+        active_downloads.clear()
         
-        await message.reply_text(f"✅ Cancelled {cancelled} download(s).")
+        # Cancel all active uploads
+        cancelled_uploads = 0
+        for upload_id in list(active_uploads.keys()):
+            active_uploads[upload_id]["cancelled"] = True
+            cancelled_uploads += 1
+        
+        await message.reply_text(
+            f"✅ **All Operations Cancelled!**\n\n"
+            f"📥 Downloads cancelled: {cancelled_downloads}\n"
+            f"📤 Uploads cancelled: {cancelled_uploads}"
+        )
     except Exception as e:
-        await message.reply_text(f"❌ Error cancelling downloads: {e}")
+        await message.reply_text(f"❌ Error cancelling: {e}")
 
 
 @app.on_message(filters.command("stats"))
