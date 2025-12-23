@@ -496,7 +496,8 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
             await safe_edit_text(status_message, f"📤 Uploading: `{file_name}`\n📁 Size: {get_readable_size(file_size)}")
             
             # Determine file type and upload accordingly
-            if file_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
+            # Note: MKV files often can't play inline in Telegram, so upload as document
+            if file_name.lower().endswith(('.mp4', '.avi', '.mov', '.webm')):
                 # Try with thumbnail first, fallback to without if it fails
                 thumb_to_use = None
                 if custom_thumb and os.path.exists(custom_thumb):
@@ -530,6 +531,17 @@ async def upload_file(client: Client, file_path: str, channel_id: int, status_me
                         )
                     else:
                         raise thumb_err
+            elif file_name.lower().endswith('.mkv'):
+                # MKV files upload as document (better for playback after download)
+                logger.info(f"Uploading MKV as document for better compatibility: {file_name}")
+                await client.send_document(
+                    chat_id=channel_id,
+                    document=file_path,
+                    thumb=custom_thumb if custom_thumb and os.path.exists(custom_thumb) else None,
+                    caption=f"🎬 {file_name}",
+                    progress=progress_callback,
+                    progress_args=(status_message, f"📤 Uploading: `{file_name}`", upload_id)
+                )
             elif file_name.lower().endswith(('.mp3', '.flac', '.wav', '.aac', '.ogg')):
                 await client.send_audio(
                     chat_id=channel_id,
